@@ -1,0 +1,23 @@
+# .antigravityrules — Reglas de Cero Regresión e Ingeniería (DESBORDE: Chain Reaction)
+
+1. **Archivos Completos sin Truncar:**
+   - Todo archivo de código o configuración debe estar 100% completo, compilable y sin placeholders (`// TODO`, `// resto del código`, `...`).
+
+2. **Física 2D Determinista e Independiente del Framerate:**
+   - El motor de juego (`src/game/GameEngine.ts`) debe calcular el paso temporal con `dt = Math.min(Math.max((now - lastTime) / 1000, 0), 0.033)` segundos y ejecutar 2 sub-pasos físicos por frame (`subDt = dt * 0.5`) para garantizar comportamiento idéntico en pantallas de 60Hz, 90Hz y 120Hz.
+   - Prohibido acoplar velocidades, aceleraciones o temporizadores directamente a frames sin multiplicar por `dt`.
+   - Prohibido añadir librerías externas de físicas (Matter.js, Box2D, Planck, etc.); toda colisión círculo-círculo y círculo-polígono convexo se resuelve con matemática geométrica propia.
+
+3. **Audio 100% Procedural:**
+   - Todo efecto sonoro (`src/game/SoundEngine.ts`) debe sintetizarse en tiempo real mediante Web Audio API. Prohibido depender de archivos `.mp3`, `.wav` u `.ogg` externos.
+
+4. **Ergonomía Móvil y Preparación Capacitor:**
+   - Respetar `env(safe-area-inset-top)` y `env(safe-area-inset-bottom)` en HUD, zona táctil inferior y modales.
+   - Bloquear zoom accidental, selección de texto y overscroll en dispositivos táctiles (`user-scalable=no`, `touch-action: none`).
+   - Todas las llamadas de vibración/háptica deben pasar por `src/services/nativeBridge.ts` con detección de plataforma Capacitor y fallback seguro en navegador.
+
+5. **Seguridad y Cadena de Suministro (Zero-Trust):**
+   - Instalar paquetes siempre con `--ignore-scripts`.
+   - Nunca hardcodear claves, tokens o secretos; usar variables `import.meta.env.VITE_*` y mantener `.env`, `*.pem`, `*.key`, `*.keystore` y `dist/` fuera de Git.
+   - Enlazar servidores locales exclusivamente a `127.0.0.1` (`localhost`), nunca a `0.0.0.0`.
+   - Cero `eval()`, `new Function()` o ejecución dinámica insegura.

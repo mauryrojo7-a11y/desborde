@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Local environment & secrets
+.env
+.env.*
+!.env.example
+
+# Keys, certificates & signing credentials
+*.pem
+*.key
+*.keystore
+*.jks
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Capacitor native generated platforms & IDE caches
+android/
+ios/
+.capacitor/
+.idea/
+.vscode/
+*.log
+npm-debug.log*
