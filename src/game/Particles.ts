@@ -147,6 +147,97 @@ export class ParticleSystem {
     this.emitShapeExplosion(x, y, '#38bdf8', '#facc15', 38, true);
   }
 
+  public emitLevelUpWave(
+    x: number,
+    y: number,
+    maxRadius: number,
+    accentColor: string
+  ): void {
+    this.rings.push({
+      x,
+      y,
+      radius: 18,
+      maxRadius,
+      life: 0.56,
+      maxLife: 0.56,
+      color: accentColor,
+      lineWidth: 6,
+    });
+    this.rings.push({
+      x,
+      y,
+      radius: 10,
+      maxRadius: maxRadius * 0.72,
+      life: 0.42,
+      maxLife: 0.42,
+      color: '#ffffff',
+      lineWidth: 3,
+    });
+
+    for (let i = 0; i < 28; i += 1) {
+      const angle = (Math.PI * 2 * i) / 28;
+      const speed = 170 + Math.random() * 230;
+      const life = 0.42 + Math.random() * 0.22;
+      this.particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: 3 + Math.random() * 2.5,
+        alpha: 1,
+        life,
+        maxLife: life,
+        color: i % 2 === 0 ? accentColor : '#ffffff',
+        shape: 'diamond',
+        rotation: angle,
+        rotSpeed: 5,
+      });
+    }
+  }
+
+  public emitAllClearBurst(x: number, y: number): void {
+    this.rings.push({
+      x,
+      y,
+      radius: 16,
+      maxRadius: 260,
+      life: 0.52,
+      maxLife: 0.52,
+      color: '#fde047',
+      lineWidth: 6,
+    });
+    this.rings.push({
+      x,
+      y,
+      radius: 8,
+      maxRadius: 185,
+      life: 0.4,
+      maxLife: 0.4,
+      color: '#ffffff',
+      lineWidth: 3,
+    });
+
+    for (let i = 0; i < 36; i += 1) {
+      const angle = (Math.PI * 2 * i) / 36 + (Math.random() - 0.5) * 0.2;
+      const speed = 140 + Math.random() * 280;
+      const life = 0.46 + Math.random() * 0.28;
+      this.particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: 3.4 + Math.random() * 3.2,
+        alpha: 1,
+        life,
+        maxLife: life,
+        color: i % 3 === 0 ? '#ffffff' : i % 2 === 0 ? '#fef08a' : '#fbbf24',
+        shape: i % 2 === 0 ? 'star' : 'diamond',
+        rotation: angle,
+        rotSpeed: (Math.random() - 0.5) * 9,
+      });
+    }
+  }
+
   public emitImpulseBurst(x: number, y: number, skin: SkinConfig, assisted: boolean): void {
     this.rings.push({
       x,
@@ -298,7 +389,8 @@ export class ParticleSystem {
     y: number,
     text: string,
     color: string,
-    size = 16
+    size = 16,
+    duration = 0.72
   ): void {
     this.texts.push({
       x,
@@ -307,8 +399,8 @@ export class ParticleSystem {
       text,
       color,
       size,
-      life: 0.72,
-      maxLife: 0.72,
+      life: duration,
+      maxLife: duration,
     });
   }
 

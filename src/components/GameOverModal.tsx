@@ -107,14 +107,19 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           </div>
 
           <h2 className="text-2xl font-black text-white tracking-tight">
-            ¿SEGUIR EN CADENA?
+            {summary.defeatReason === 'overflow'
+              ? '¡DESBORDE DETECTADO!'
+              : '¿SEGUIR EN CADENA?'}
           </h2>
           <p className="mt-1 text-xs text-zinc-400">
-            Puntaje actual:{' '}
+            {summary.defeatReason === 'overflow'
+              ? 'Una figura cruzó la línea láser'
+              : 'Caída al vacío'}{' '}
+            · Nv. <span className="font-mono font-bold text-cyan-300">{summary.level}</span> ·{' '}
             <span className="font-mono font-bold text-zinc-200">
               {summary.score.toLocaleString('es-ES')}
             </span>{' '}
-            · 1 revive disponible por partida
+            pts
           </p>
 
           <div className="mt-5 flex flex-col gap-3">
@@ -173,7 +178,9 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         ) : null}
 
         <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-zinc-400">
-          Partida Terminada
+          {summary.defeatReason === 'overflow'
+            ? `Desborde · Nivel ${summary.level}`
+            : `Partida Terminada · Nivel ${summary.level}`}
         </h2>
         <div className="mt-1 font-mono text-5xl font-black tracking-tight text-white">
           {summary.score.toLocaleString('es-ES')}

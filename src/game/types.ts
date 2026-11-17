@@ -42,6 +42,7 @@ export interface GeometricShape {
   glowColor: string;
   hitFlash: number;
   squashTimer: number;
+  dangerRatio: number;
 }
 
 export type OrbKind = 'mult2' | 'mult3' | 'shockwave';
@@ -74,12 +75,18 @@ export interface SparkBall {
 
 export type EnginePhase = 'playing' | 'revive_offer' | 'gameover';
 
+export type DefeatReason = 'abyss' | 'overflow';
+
 export interface HudSnapshot {
   score: number;
   combo: number;
   maxCombo: number;
   runSparks: number;
   shapesDestroyed: number;
+  level: number;
+  levelKills: number;
+  levelTargetKills: number;
+  overflowAlert: boolean;
   activeMultiplier: 1 | 2 | 3;
   multiplierTimeLeft: number;
   multiplierMaxTime: number;
@@ -94,4 +101,6 @@ export interface RunSummary {
   shapesDestroyed: number;
   runSparks: number;
   durationSec: number;
+  level: number;
+  defeatReason: DefeatReason;
 }

@@ -357,6 +357,104 @@ class SoundEngine {
       osc.stop(start + 0.24);
     });
   }
+
+  public playOverflowWarning(urgency: number): void {
+    const audio = this.ensureReady();
+    if (!audio) return;
+    const { ctx, out } = audio;
+    const t = ctx.currentTime;
+    const clamped = Math.max(0, Math.min(1, urgency));
+
+    const osc = ctx.createOscillator();
+    const sub = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(122 + clamped * 28, t);
+    osc.frequency.exponentialRampToValueAtTime(84, t + 0.13);
+
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(64, t);
+    sub.frequency.exponentialRampToValueAtTime(48, t + 0.13);
+
+    gain.gain.setValueAtTime(0.001, t);
+    gain.gain.linearRampToValueAtTime(0.085 + clamped * 0.055, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+
+    osc.connect(gain);
+    sub.connect(gain);
+    gain.connect(out);
+
+    osc.start(t);
+    sub.start(t);
+    osc.stop(t + 0.15);
+    sub.stop(t + 0.15);
+  }
+
+  public playLevelUp(level: number): void {
+    const audio = this.ensureReady();
+    if (!audio) return;
+    const { ctx, out } = audio;
+    const t = ctx.currentTime;
+
+    const pitchBoost = 1 + Math.min(0.18, (level - 1) * 0.025);
+    const arpeggio = [523.25, 659.25, 783.99, 987.77, 1046.5];
+
+    arpeggio.forEach((freq, idx) => {
+      const start = t + idx * 0.055;
+      const noteFreq = freq * pitchBoost;
+
+      const osc = ctx.createOscillator();
+      const overtone = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(noteFreq, start);
+
+      overtone.type = 'sine';
+      overtone.frequency.setValueAtTime(noteFreq * 2, start);
+
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.22, start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+
+      osc.connect(gain);
+      overtone.connect(gain);
+      gain.connect(out);
+
+      osc.start(start);
+      overtone.start(start);
+      osc.stop(start + 0.26);
+      overtone.stop(start + 0.26);
+    });
+  }
+
+  public playAllClear(): void {
+    const audio = this.ensureReady();
+    if (!audio) return;
+    const { ctx, out } = audio;
+    const t = ctx.currentTime;
+
+    const chord = [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98];
+    chord.forEach((freq, idx) => {
+      const start = t + idx * 0.018;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, start);
+
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.14, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.38);
+
+      osc.connect(gain);
+      gain.connect(out);
+
+      osc.start(start);
+      osc.stop(start + 0.4);
+    });
+  }
 }
 
 export const soundEngine = new SoundEngine();

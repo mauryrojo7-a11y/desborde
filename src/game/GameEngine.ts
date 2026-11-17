@@ -1,6 +1,7 @@
 import { ParticleSystem } from './Particles';
 import { soundEngine } from './SoundEngine';
 import {
+  DefeatReason,
   EnginePhase,
   GeometricShape,
   HudSnapshot,
@@ -31,6 +32,16 @@ const IMPULSE_COOLDOWN_SEC = 0.35;
 const COMBO_RESET_TIME = 2.6;
 const MULTIPLIER_DURATION_SEC = 8.0;
 const MAX_DT = 0.033;
+const OVERFLOW_WARN_DIST = 80;
+
+const LEVEL_THEMES = [
+  { accent: '#22d3ee', tintRgb: '34, 211, 238' },
+  { accent: '#a855f7', tintRgb: '168, 85, 247' },
+  { accent: '#10b981', tintRgb: '16, 185, 129' },
+  { accent: '#f43f5e', tintRgb: '244, 63, 94' },
+  { accent: '#f59e0b', tintRgb: '245, 158, 11' },
+  { accent: '#e879f9', tintRgb: '232, 121, 249' },
+] as const;
 
 const SHAPE_PALETTES = [
   { stroke: '#22d3ee', fill: 'rgba(6, 182, 212, 0.16)', glow: '#06b6d4' },
@@ -73,18 +84,28 @@ export class GameEngine {
   private comboTimer = 0;
   private runSparks = 0;
   private shapesDestroyed = 0;
+  private level = 1;
+  private levelKills = 0;
+  private levelTargetKills = 15;
+  private defeatReason: DefeatReason = 'abyss';
   private revivedUsed = false;
 
   private activeMultiplier: 1 | 2 | 3 = 1;
   private multiplierTimeLeft = 0;
 
   private hitstopTimer = 0;
+  private slowMoTimer = 0;
+  private screenFlashAlpha = 0;
+  private screenFlashColor = '#ffffff';
   private shakeTimer = 0;
   private shakeStrength = 0;
   private touchHintAlpha = 1;
   private impulseCount = 0;
   private edgePulseLeft = 0;
   private edgePulseRight = 0;
+  private overflowAlert = false;
+  private overflowDangerMax = 0;
+  private overflowWarnBeepTimer = 0;
 
   private nextId = 1;
   private spawnTimer = 0.25;
@@ -184,24 +205,58 @@ export class GameEngine {
     }
   }
 
+  private getOverflowLineY(): number {
+    return Math.min(this.height * 0.79, this.height - this.safeBottom - 108);
+  }
+
+  private getLevelTheme(): { accent: string; tintRgb: string } {
+    return LEVEL_THEMES[(this.level - 1) % LEVEL_THEMES.length];
+  }
+
+  private getLevelTargetKills(lvl: number): number {
+    return 15 + (lvl - 1) * 5;
+  }
+
+  private getShapeBottomY(shape: GeometricShape): number {
+    if (shape.kind === 'circle') {
+      return shape.y + shape.radius;
+    }
+    const sides = shape.kind === 'triangle' ? 3 : 6;
+    let maxY = shape.y;
+    for (let i = 0; i < sides; i += 1) {
+      const angle = shape.rotation + (Math.PI * 2 * i) / sides;
+      const vy = shape.y + Math.sin(angle) * shape.radius;
+      if (vy > maxY) {
+        maxY = vy;
+      }
+    }
+    return maxY;
+  }
+
   public revivePlayer(): void {
     if (this.phase !== 'revive_offer' || this.revivedUsed) return;
     this.revivedUsed = true;
     this.phase = 'playing';
+    this.overflowAlert = false;
+    this.overflowDangerMax = 0;
 
+    const overflowY = this.getOverflowLineY();
     this.ball.x = this.width * 0.5;
-    this.ball.y = Math.min(this.height * 0.65, this.height - this.safeBottom - 135);
+    this.ball.y = Math.min(this.height * 0.62, overflowY - 62);
     this.ball.vx = 0;
     this.ball.vy = -590;
     this.ball.cooldownTimer = 0;
-    this.ball.invulnTimer = 1.6;
+    this.ball.invulnTimer = 2.0;
     this.comboTimer = COMBO_RESET_TIME;
 
-    // Clear shapes near the bottom third so the player always recovers cleanly
-    const safeCutoffY = this.height * 0.52;
+    // Shockwave destroys shapes near the overflow line and pushes remaining ones upward
+    const destroyThresholdY = overflowY - 170;
+    const minTopY = this.safeTop + 92;
+
     for (let i = this.shapes.length - 1; i >= 0; i -= 1) {
       const s = this.shapes[i];
-      if (s.y + s.radius > safeCutoffY) {
+      const bottomY = this.getShapeBottomY(s);
+      if (bottomY >= destroyThresholdY) {
         this.particles.emitShapeExplosion(
           s.x,
           s.y,
@@ -211,12 +266,22 @@ export class GameEngine {
           false
         );
         this.shapes.splice(i, 1);
+      } else {
+        s.y = Math.max(minTopY + s.radius, s.y - 110);
+        s.dangerRatio = 0;
       }
     }
 
-    this.particles.emitShockwave(this.ball.x, this.ball.y, 175);
-    this.particles.addFloatingText(this.ball.x, this.ball.y - 36, '¡REVIVIDO!', '#4ade80', 19);
-    this.triggerShake(7, 0.25);
+    this.particles.emitShockwave(this.width * 0.5, overflowY, 240);
+    this.particles.addFloatingText(
+      this.ball.x,
+      this.ball.y - 38,
+      '¡REVIVIDO! ESCUDO 2s',
+      '#4ade80',
+      18,
+      1.05
+    );
+    this.triggerShake(8, 0.28);
     soundEngine.playRevive();
     hapticSuccess();
 
@@ -242,7 +307,7 @@ export class GameEngine {
     const localY = clientY - rect.top;
 
     // Ignore accidental touches inside the top HUD bar
-    if (localY < this.safeTop + 56) {
+    if (localY < this.safeTop + 74) {
       return;
     }
 
@@ -262,18 +327,28 @@ export class GameEngine {
     this.comboTimer = 0;
     this.runSparks = 0;
     this.shapesDestroyed = 0;
+    this.level = 1;
+    this.levelKills = 0;
+    this.levelTargetKills = this.getLevelTargetKills(1);
+    this.defeatReason = 'abyss';
     this.revivedUsed = false;
 
     this.activeMultiplier = 1;
     this.multiplierTimeLeft = 0;
 
     this.hitstopTimer = 0;
+    this.slowMoTimer = 0;
+    this.screenFlashAlpha = 0;
+    this.screenFlashColor = '#ffffff';
     this.shakeTimer = 0;
     this.shakeStrength = 0;
     this.touchHintAlpha = 1;
     this.impulseCount = 0;
     this.edgePulseLeft = 0;
     this.edgePulseRight = 0;
+    this.overflowAlert = false;
+    this.overflowDangerMax = 0;
+    this.overflowWarnBeepTimer = 0;
 
     this.shapes = [];
     this.orbs = [];
@@ -283,9 +358,10 @@ export class GameEngine {
     this.spawnTimer = 0.35;
     this.orbSpawnTimer = 7.5;
 
+    const overflowY = this.getOverflowLineY();
     this.ball = {
       x: this.width * 0.5,
-      y: Math.min(this.height * 0.64, this.height - this.safeBottom - 140),
+      y: Math.min(this.height * 0.62, overflowY - 62),
       vx: (Math.random() - 0.5) * 90,
       vy: -510,
       radius: 14,
@@ -299,8 +375,8 @@ export class GameEngine {
     };
 
     // Pre-populate opening wave so action begins immediately with zero dead air
-    this.spawnWaveRow(this.safeTop + 125, 3, 1, 2);
-    this.spawnWaveRow(this.safeTop + 215, 2, 1, 2);
+    this.spawnWaveRow(this.safeTop + 135, 3, 1, 2);
+    this.spawnWaveRow(this.safeTop + 225, 2, 1, 2);
   }
 
   private applyMagneticImpulse(touchX: number): void {
@@ -407,6 +483,10 @@ export class GameEngine {
       this.shakeTimer = Math.max(0, this.shakeTimer - dt);
     }
 
+    if (this.screenFlashAlpha > 0) {
+      this.screenFlashAlpha = Math.max(0, this.screenFlashAlpha - dt * 1.45);
+    }
+
     if (this.edgePulseLeft > 0) this.edgePulseLeft = Math.max(0, this.edgePulseLeft - dt * 3);
     if (this.edgePulseRight > 0) this.edgePulseRight = Math.max(0, this.edgePulseRight - dt * 3);
 
@@ -417,10 +497,16 @@ export class GameEngine {
       return;
     }
 
+    let simDt = dt;
+    if (this.slowMoTimer > 0) {
+      this.slowMoTimer = Math.max(0, this.slowMoTimer - dt);
+      simDt = dt * 0.3;
+    }
+
     // Cooldown & power-up timers
     if (this.ball.cooldownTimer > 0) {
       const prev = this.ball.cooldownTimer;
-      this.ball.cooldownTimer = Math.max(0, prev - dt);
+      this.ball.cooldownTimer = Math.max(0, prev - simDt);
       if (prev > 0 && this.ball.cooldownTimer === 0) {
         this.ball.readyFlashTimer = 0.16;
       }
@@ -436,7 +522,7 @@ export class GameEngine {
     }
 
     if (this.combo > 0) {
-      this.comboTimer -= dt;
+      this.comboTimer -= simDt;
       if (this.comboTimer <= 0) {
         this.combo = 0;
         this.comboTimer = 0;
@@ -444,7 +530,7 @@ export class GameEngine {
     }
 
     if (this.activeMultiplier > 1) {
-      this.multiplierTimeLeft -= dt;
+      this.multiplierTimeLeft -= simDt;
       if (this.multiplierTimeLeft <= 0) {
         this.activeMultiplier = 1;
         this.multiplierTimeLeft = 0;
@@ -453,7 +539,7 @@ export class GameEngine {
 
     // Tick per-shape hit cooldowns
     this.shapeHitCooldowns.forEach((remaining, shapeId) => {
-      const next = remaining - dt;
+      const next = remaining - simDt;
       if (next <= 0) {
         this.shapeHitCooldowns.delete(shapeId);
       } else {
@@ -462,21 +548,24 @@ export class GameEngine {
     });
 
     // Procedural wave & risk-reward orb spawning
-    this.spawnTimer -= dt;
+    this.spawnTimer -= simDt;
     if (this.spawnTimer <= 0) {
       this.spawnProceduralWave();
     }
 
-    this.orbSpawnTimer -= dt;
+    this.orbSpawnTimer -= simDt;
     if (this.orbSpawnTimer <= 0) {
       this.spawnEdgeOrb();
     }
 
-    // Move shapes & orbs
-    this.updateShapesAndOrbs(dt);
+    // Move shapes & orbs and evaluate Overflow Line proximity
+    this.updateShapesAndOrbs(simDt);
+    if (this.phase !== 'playing') {
+      return;
+    }
 
     // 2 deterministic physics substeps per frame
-    const subDt = dt * 0.5;
+    const subDt = simDt * 0.5;
     for (let step = 0; step < 2; step += 1) {
       if (this.phase !== 'playing') break;
       this.stepBallPhysics(subDt);
@@ -489,9 +578,9 @@ export class GameEngine {
       this.ball.radius,
       this.skin,
       this.combo >= 5,
-      dt
+      simDt
     );
-    this.particles.update(dt);
+    this.particles.update(simDt);
 
     this.hudEmitAccumulator += dt;
     if (this.hudEmitAccumulator >= 0.05) {
@@ -502,6 +591,8 @@ export class GameEngine {
 
   private updateShapesAndOrbs(dt: number): void {
     const abyssLine = this.height + 55;
+    const overflowLineY = this.getOverflowLineY();
+    let maxDanger = 0;
 
     for (let i = this.shapes.length - 1; i >= 0; i -= 1) {
       const s = this.shapes[i];
@@ -522,9 +613,49 @@ export class GameEngine {
         s.squashTimer = Math.max(0, s.squashTimer - dt * 5);
       }
 
+      const bottomY = this.getShapeBottomY(s);
+      const distToOverflow = overflowLineY - bottomY;
+
+      if (distToOverflow <= 0) {
+        s.dangerRatio = 1;
+        this.particles.emitShapeExplosion(
+          s.x,
+          overflowLineY,
+          '#ef4444',
+          '#f59e0b',
+          s.radius,
+          true
+        );
+        this.overflowAlert = true;
+        this.overflowDangerMax = 1;
+        this.triggerDefeat('overflow');
+        return;
+      }
+
+      if (distToOverflow < OVERFLOW_WARN_DIST) {
+        s.dangerRatio = Math.max(0, Math.min(1, 1 - distToOverflow / OVERFLOW_WARN_DIST));
+        if (s.dangerRatio > maxDanger) {
+          maxDanger = s.dangerRatio;
+        }
+      } else {
+        s.dangerRatio = 0;
+      }
+
       if (s.y - s.radius > abyssLine) {
         this.shapes.splice(i, 1);
       }
+    }
+
+    this.overflowDangerMax = maxDanger;
+    this.overflowAlert = maxDanger > 0;
+    if (this.overflowAlert) {
+      this.overflowWarnBeepTimer -= dt;
+      if (this.overflowWarnBeepTimer <= 0) {
+        soundEngine.playOverflowWarning(maxDanger);
+        this.overflowWarnBeepTimer = Math.max(0.28, 0.58 - maxDanger * 0.24);
+      }
+    } else {
+      this.overflowWarnBeepTimer = 0.05;
     }
 
     for (let i = this.orbs.length - 1; i >= 0; i -= 1) {
@@ -555,8 +686,8 @@ export class GameEngine {
       this.edgePulseRight = 1;
     }
 
-    // Soft ceiling below HUD
-    const topLimit = this.safeTop + 66 + this.ball.radius;
+    // Soft ceiling below HUD + level bar
+    const topLimit = this.safeTop + 82 + this.ball.radius;
     if (this.ball.y < topLimit) {
       this.ball.y = topLimit;
       this.ball.vy = Math.max(120, Math.abs(this.ball.vy) * 0.65);
@@ -617,7 +748,7 @@ export class GameEngine {
         this.ball.vy = -560;
         return;
       }
-      this.handleAbyssFall();
+      this.triggerDefeat('abyss');
     }
   }
 
@@ -795,7 +926,10 @@ export class GameEngine {
     soundEngine.playComboHit(this.combo);
 
     if (shape.hp <= 0) {
-      this.destroyShapeAt(index);
+      const leveledUp = this.destroyShapeAt(index, true);
+      if (!leveledUp && this.elapsedTime > 5.0 && this.shapes.length === 0) {
+        this.triggerAllClear();
+      }
     } else {
       this.triggerShake(Math.min(5, 1.5 + this.combo * 0.25), 0.08);
       hapticLight();
@@ -804,9 +938,9 @@ export class GameEngine {
     this.emitHud();
   }
 
-  private destroyShapeAt(index: number): void {
+  private destroyShapeAt(index: number, countForProgression: boolean): boolean {
     const shape = this.shapes[index];
-    if (!shape) return;
+    if (!shape) return false;
     this.shapes.splice(index, 1);
 
     this.shapesDestroyed += 1;
@@ -844,6 +978,109 @@ export class GameEngine {
 
     this.triggerShake(Math.min(12, 3.2 + this.combo * 0.45 + shape.maxHp * 0.4), 0.16);
     soundEngine.playDestroy(shape.maxHp);
+
+    if (countForProgression) {
+      this.levelKills += 1;
+      if (this.levelKills >= this.levelTargetKills) {
+        this.triggerLevelUp();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private triggerLevelUp(): void {
+    this.level += 1;
+    this.levelKills = 0;
+    this.levelTargetKills = this.getLevelTargetKills(this.level);
+    this.overflowAlert = false;
+    this.overflowDangerMax = 0;
+
+    const theme = this.getLevelTheme();
+    const cx = this.width * 0.5;
+    const cy = this.height * 0.44;
+
+    this.particles.emitLevelUpWave(cx, cy, Math.max(this.width, this.height) * 0.85, theme.accent);
+    this.screenFlashColor = theme.accent;
+    this.screenFlashAlpha = 0.26;
+    this.triggerShake(9, 0.26);
+
+    // Clear all remaining shapes on screen and grant their destruction points
+    for (let i = this.shapes.length - 1; i >= 0; i -= 1) {
+      const s = this.shapes[i];
+      this.score += 25 * s.maxHp * this.activeMultiplier;
+      this.shapesDestroyed += 1;
+      this.particles.emitShapeExplosion(
+        s.x,
+        s.y,
+        s.strokeColor,
+        theme.accent,
+        s.radius,
+        false
+      );
+      this.shapes.splice(i, 1);
+    }
+
+    this.particles.addFloatingText(
+      cx,
+      cy - 14,
+      `NIVEL ${this.level}`,
+      theme.accent,
+      28,
+      1.25
+    );
+    this.particles.addFloatingText(
+      cx,
+      cy + 20,
+      `OLEADA ACELERADA`,
+      '#fafafa',
+      13,
+      1.05
+    );
+
+    this.spawnTimer = Math.max(this.spawnTimer, 1.15);
+    soundEngine.playLevelUp(this.level);
+    hapticSuccess();
+  }
+
+  private triggerAllClear(): void {
+    const clearBonus = 500 * this.level;
+    const sparkBonus = 15;
+
+    this.score += clearBonus;
+    this.runSparks += sparkBonus;
+    this.slowMoTimer = 0.35;
+    this.screenFlashColor = '#fef08a';
+    this.screenFlashAlpha = 0.34;
+    this.overflowAlert = false;
+    this.overflowDangerMax = 0;
+
+    const cx = this.width * 0.5;
+    const cy = this.height * 0.42;
+
+    this.particles.emitAllClearBurst(cx, cy);
+    this.particles.addFloatingText(
+      cx,
+      cy - 12,
+      `¡DESPEJE TOTAL! +${clearBonus}`,
+      '#fef08a',
+      22,
+      1.15
+    );
+    this.particles.addFloatingText(
+      cx,
+      cy + 20,
+      `+${sparkBonus} CHISPAS`,
+      '#fbbf24',
+      16,
+      1.05
+    );
+
+    this.triggerShake(10, 0.22);
+    this.spawnTimer = Math.min(this.spawnTimer, 0.75);
+    soundEngine.playAllClear();
+    hapticSuccess();
   }
 
   private collectOrb(orb: PowerOrb): void {
@@ -882,6 +1119,9 @@ export class GameEngine {
     soundEngine.playShockwave();
     hapticHeavy();
 
+    let destroyedByShockwave = false;
+    let leveledUp = false;
+
     for (let i = this.shapes.length - 1; i >= 0; i -= 1) {
       const s = this.shapes[i];
       s.hp -= 3;
@@ -893,26 +1133,40 @@ export class GameEngine {
       this.particles.emitHitSparks(s.x, s.y, '#38bdf8', 7);
 
       if (s.hp <= 0) {
-        this.destroyShapeAt(i);
+        destroyedByShockwave = true;
+        if (this.destroyShapeAt(i, true)) {
+          leveledUp = true;
+          break;
+        }
       }
+    }
+
+    if (
+      destroyedByShockwave &&
+      !leveledUp &&
+      this.elapsedTime > 5.0 &&
+      this.shapes.length === 0
+    ) {
+      this.triggerAllClear();
     }
 
     this.emitHud();
   }
 
   private spawnProceduralWave(): void {
-    const difficulty = Math.min(1, this.elapsedTime / 95);
-    const minHp = 1 + Math.floor(this.elapsedTime / 24);
-    const maxHp = Math.min(14, 2 + Math.floor(this.elapsedTime / 11));
+    const levelBoost = this.level - 1;
+    const difficulty = Math.min(1, this.elapsedTime / 95 + levelBoost * 0.1);
+    const minHp = 1 + Math.floor(this.elapsedTime / 28) + Math.floor(levelBoost * 0.75);
+    const maxHp = Math.min(16, 2 + Math.floor(this.elapsedTime / 12) + levelBoost);
 
     // Prevent excessive crowding
     if (this.shapes.length < 16) {
-      const count = difficulty > 0.45 ? (Math.random() < 0.65 ? 3 : 2) : 2;
+      const count = difficulty > 0.42 ? (Math.random() < 0.65 ? 3 : 2) : 2;
       this.spawnWaveRow(this.safeTop - 36, count, minHp, maxHp);
     }
 
-    const baseInterval = 2.9 - difficulty * 1.15;
-    this.spawnTimer = Math.max(1.45, baseInterval + (Math.random() - 0.5) * 0.35);
+    const baseInterval = 2.85 - difficulty * 1.15;
+    this.spawnTimer = Math.max(1.32, baseInterval + (Math.random() - 0.5) * 0.32);
   }
 
   private spawnWaveRow(y: number, count: number, minHp: number, maxHp: number): void {
@@ -930,10 +1184,12 @@ export class GameEngine {
       const palette = SHAPE_PALETTES[Math.floor(Math.random() * SHAPE_PALETTES.length)];
       const radius = 24 + Math.min(14, hp * 1.3);
 
-      // Gentle lateral sway unlocks as waves advance
-      const enableSway = this.elapsedTime > 12 && Math.random() < 0.65;
+      // Gentle lateral sway unlocks as levels or waves advance
+      const enableSway = (this.level >= 2 || this.elapsedTime > 12) && Math.random() < 0.65;
       const swayAmp = enableSway ? 14 + Math.random() * 20 : 0;
-      const fallSpeed = 34 + Math.min(34, this.elapsedTime * 0.42) + Math.random() * 10;
+      const levelSpeedBonus = Math.min(36, (this.level - 1) * 6.5);
+      const fallSpeed =
+        34 + Math.min(30, this.elapsedTime * 0.35) + levelSpeedBonus + Math.random() * 10;
 
       this.shapes.push({
         id: this.nextId++,
@@ -955,6 +1211,7 @@ export class GameEngine {
         glowColor: palette.glow,
         hitFlash: 0,
         squashTimer: 0,
+        dangerRatio: 0,
       });
     }
   }
@@ -981,7 +1238,8 @@ export class GameEngine {
     this.orbSpawnTimer = 8.5 + Math.random() * 3.5;
   }
 
-  private handleAbyssFall(): void {
+  private triggerDefeat(reason: DefeatReason): void {
+    this.defeatReason = reason;
     if (!this.revivedUsed) {
       this.phase = 'revive_offer';
       hapticWarning();
@@ -1009,6 +1267,8 @@ export class GameEngine {
       shapesDestroyed: this.shapesDestroyed,
       runSparks: this.runSparks,
       durationSec: Math.round(this.elapsedTime),
+      level: this.level,
+      defeatReason: this.defeatReason,
     };
   }
 
@@ -1019,6 +1279,10 @@ export class GameEngine {
       maxCombo: this.maxCombo,
       runSparks: this.runSparks,
       shapesDestroyed: this.shapesDestroyed,
+      level: this.level,
+      levelKills: this.levelKills,
+      levelTargetKills: this.levelTargetKills,
+      overflowAlert: this.overflowAlert,
       activeMultiplier: this.activeMultiplier,
       multiplierTimeLeft: this.multiplierTimeLeft,
       multiplierMaxTime: MULTIPLIER_DURATION_SEC,
@@ -1054,12 +1318,34 @@ export class GameEngine {
     this.particles.renderParticlesAndRings(ctx);
     this.particles.renderFloatingTexts(ctx);
 
+    if (this.screenFlashAlpha > 0.005) {
+      ctx.globalAlpha = this.screenFlashAlpha;
+      ctx.fillStyle = this.screenFlashColor;
+      ctx.fillRect(-16, -16, this.width + 32, this.height + 32);
+    }
+
     ctx.restore();
   }
 
   private renderBackdropGrid(ctx: CanvasRenderingContext2D): void {
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.032)';
+    const theme = this.getLevelTheme();
+
+    // Subtle ambient level tint over zinc-950
+    const ambientGrad = ctx.createRadialGradient(
+      this.width * 0.5,
+      this.height * 0.25,
+      20,
+      this.width * 0.5,
+      this.height * 0.45,
+      this.height * 0.85
+    );
+    ambientGrad.addColorStop(0, `rgba(${theme.tintRgb}, 0.085)`);
+    ambientGrad.addColorStop(1, 'rgba(9, 9, 11, 0)');
+    ctx.fillStyle = ambientGrad;
+    ctx.fillRect(0, 0, this.width, this.height);
+
+    ctx.strokeStyle = `rgba(${theme.tintRgb}, 0.055)`;
     ctx.lineWidth = 1;
 
     const spacing = 48;
@@ -1079,7 +1365,7 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    // Fever mode subtle top/side glow
+    // Fever mode subtle glow
     if (this.combo >= 5) {
       const feverGrad = ctx.createRadialGradient(
         this.ball.x,
@@ -1120,22 +1406,71 @@ export class GameEngine {
     ctx.fillStyle = rightGrad;
     ctx.fillRect(this.width - 22, 0, 22, this.height);
 
-    // Ergonomic one-touch lower-third zone (anti-occlusion)
-    const zoneTop = this.height * 0.67;
-    const zoneGrad = ctx.createLinearGradient(0, zoneTop, 0, this.height);
-    zoneGrad.addColorStop(0, 'rgba(34, 211, 238, 0)');
-    zoneGrad.addColorStop(1, 'rgba(34, 211, 238, 0.075)');
-    ctx.fillStyle = zoneGrad;
-    ctx.fillRect(0, zoneTop, this.width, this.height - zoneTop);
+    // Overflow Laser Line (fixed in lower quarter, above thumb touch zone)
+    const overflowY = this.getOverflowLineY();
+    const pulseSpeed = this.overflowAlert ? 14 + this.overflowDangerMax * 8 : 3.6;
+    const pulseWave = 0.5 + 0.5 * Math.sin(this.elapsedTime * pulseSpeed);
+    const lineAlpha = this.overflowAlert ? 0.72 + pulseWave * 0.28 : 0.48 + pulseWave * 0.24;
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
-    ctx.setLineDash([6, 8]);
-    ctx.lineWidth = 1;
+    // Danger zone aura immediately above the laser line when alert is active
+    if (this.overflowAlert) {
+      const alertGrad = ctx.createLinearGradient(0, overflowY - 78, 0, overflowY);
+      alertGrad.addColorStop(0, 'rgba(239, 68, 68, 0)');
+      alertGrad.addColorStop(
+        1,
+        `rgba(239, 68, 68, ${(0.14 + this.overflowDangerMax * 0.18) * (0.65 + pulseWave * 0.35)})`
+      );
+      ctx.fillStyle = alertGrad;
+      ctx.fillRect(0, overflowY - 78, this.width, 78);
+    }
+
+    // Ergonomic one-touch zone below the Overflow Line (anti-occlusion)
+    const zoneGrad = ctx.createLinearGradient(0, overflowY, 0, this.height);
+    zoneGrad.addColorStop(0, 'rgba(34, 211, 238, 0.02)');
+    zoneGrad.addColorStop(1, 'rgba(34, 211, 238, 0.085)');
+    ctx.fillStyle = zoneGrad;
+    ctx.fillRect(0, overflowY, this.width, this.height - overflowY);
+
+    // Laser beam itself (amber/red glow)
+    ctx.save();
+    ctx.shadowBlur = this.overflowAlert ? 18 + pulseWave * 8 : 10;
+    ctx.shadowColor = this.overflowAlert ? '#ef4444' : '#f59e0b';
+    const laserGrad = ctx.createLinearGradient(0, overflowY, this.width, overflowY);
+    laserGrad.addColorStop(0, `rgba(245, 158, 11, ${lineAlpha * 0.75})`);
+    laserGrad.addColorStop(0.5, `rgba(239, 68, 68, ${lineAlpha})`);
+    laserGrad.addColorStop(1, `rgba(245, 158, 11, ${lineAlpha * 0.75})`);
+    ctx.strokeStyle = laserGrad;
+    ctx.lineWidth = this.overflowAlert ? 2.8 : 2;
     ctx.beginPath();
-    ctx.moveTo(18, zoneTop);
-    ctx.lineTo(this.width - 18, zoneTop);
+    ctx.moveTo(10, overflowY);
+    ctx.lineTo(this.width - 10, overflowY);
     ctx.stroke();
-    ctx.setLineDash([]);
+
+    // Inner bright core hairline
+    ctx.strokeStyle = this.overflowAlert
+      ? `rgba(254, 202, 202, ${0.65 + pulseWave * 0.35})`
+      : 'rgba(253, 230, 138, 0.45)';
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(12, overflowY);
+    ctx.lineTo(this.width - 12, overflowY);
+    ctx.stroke();
+    ctx.restore();
+
+    // Crisp laser label pill on right edge
+    ctx.save();
+    ctx.font = '800 9px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = this.overflowAlert
+      ? `rgba(252, 165, 165, ${0.75 + pulseWave * 0.25})`
+      : 'rgba(251, 191, 36, 0.55)';
+    ctx.fillText(
+      this.overflowAlert ? '¡ALERTA DE DESBORDE!' : 'LÍNEA DE DESBORDE',
+      this.width - 14,
+      overflowY - 5
+    );
+    ctx.restore();
 
     // Bottom abyss warning line
     const abyssGlow = ctx.createLinearGradient(0, this.height - 22, 0, this.height);
@@ -1168,6 +1503,9 @@ export class GameEngine {
     for (let i = 0; i < this.shapes.length; i += 1) {
       const s = this.shapes[i];
       const scale = 1 + s.squashTimer * 0.14;
+      const dangerBlink =
+        s.dangerRatio > 0 &&
+        Math.sin(this.elapsedTime * (12 + s.dangerRatio * 14)) > 0;
 
       ctx.save();
       ctx.translate(s.x, s.y);
@@ -1175,11 +1513,18 @@ export class GameEngine {
 
       ctx.save();
       ctx.rotate(s.rotation);
-      ctx.shadowBlur = s.hitFlash > 0.1 ? 22 : 12;
-      ctx.shadowColor = s.hitFlash > 0.1 ? '#ffffff' : s.glowColor;
-      ctx.fillStyle = s.hitFlash > 0.1 ? 'rgba(255, 255, 255, 0.35)' : s.fillColor;
-      ctx.strokeStyle = s.hitFlash > 0.1 ? '#ffffff' : s.strokeColor;
-      ctx.lineWidth = 2.8;
+      ctx.shadowBlur = s.hitFlash > 0.1 ? 22 : dangerBlink ? 20 : 12;
+      ctx.shadowColor =
+        s.hitFlash > 0.1 ? '#ffffff' : dangerBlink ? '#ef4444' : s.glowColor;
+      ctx.fillStyle =
+        s.hitFlash > 0.1
+          ? 'rgba(255, 255, 255, 0.35)'
+          : dangerBlink
+          ? 'rgba(239, 68, 68, 0.32)'
+          : s.fillColor;
+      ctx.strokeStyle =
+        s.hitFlash > 0.1 ? '#ffffff' : dangerBlink ? '#ef4444' : s.strokeColor;
+      ctx.lineWidth = dangerBlink ? 3.3 : 2.8;
 
       ctx.beginPath();
       if (s.kind === 'circle') {
@@ -1200,7 +1545,7 @@ export class GameEngine {
       ctx.restore();
 
       // Upright crisp HP numeral
-      ctx.fillStyle = '#fafafa';
+      ctx.fillStyle = dangerBlink ? '#fee2e2' : '#fafafa';
       ctx.font = `800 ${Math.round(Math.max(14, s.radius * 0.62))}px "JetBrains Mono", Inter, sans-serif`;
       ctx.fillText(String(s.hp), 0, 1);
 
@@ -1291,9 +1636,21 @@ export class GameEngine {
     ctx.save();
     ctx.translate(b.x, b.y);
 
-    // Blink softly while post-revive invulnerability is active
-    if (b.invulnTimer > 0 && Math.floor(b.invulnTimer * 14) % 2 === 0) {
-      ctx.globalAlpha = 0.65;
+    // Temporary 2s shield aura after revive
+    if (b.invulnTimer > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(74, 222, 128, 0.78)';
+      ctx.fillStyle = 'rgba(74, 222, 128, 0.12)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.radius + 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      if (Math.floor(b.invulnTimer * 14) % 2 === 0) {
+        ctx.globalAlpha = 0.72;
+      }
     }
 
     // Cooldown charge ring around the ball (0.35s)
